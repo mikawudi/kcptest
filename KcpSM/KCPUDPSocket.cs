@@ -94,11 +94,11 @@ namespace KcpSM
     public class KCP
     {
         private UInt32 _conv;
-        private KCPPackage[] recv_buff = new KCPPackage[0];
-        private KCPPackage[] recv_queue = new KCPPackage[0];
+        private KCPPackage[] recv_buff = new KCPPackage[0];//接收到的集合
+        private KCPPackage[] recv_queue = new KCPPackage[0];//接收到并且校验成功的集合
         private uint remoteRecvWnd = 32; //默认初始远端wnd值
-        private KCPPackage[] send_queue = new KCPPackage[0];
-        private KCPPackage[] send_buf = new KCPPackage[0];
+        private KCPPackage[] send_queue = new KCPPackage[0];//未发送的集合
+        private KCPPackage[] send_buf = new KCPPackage[0];//已发送,等待ack的集合
         private int rcv_next = 0;
         private int rcv_wnd = 32;
 
@@ -122,7 +122,7 @@ namespace KcpSM
                     break;
             if (needAckedCount > 0)
                 this.send_buf = slice<KCPPackage>(this.send_buf, needAckedCount, this.send_buf.Length);
-            if(data.Cmd == 82)//ack
+            if (data.Cmd == 82)//ack
             {
                 if (this.send_buf.Length > 0)
                 {
@@ -145,7 +145,7 @@ namespace KcpSM
                     }
                 }
             }
-            if(data.Cmd == 81)//push
+            if (data.Cmd == 81)//push
             {
                 if (this.rcv_next + this.rcv_wnd > data.Sn)
                 {
@@ -155,10 +155,10 @@ namespace KcpSM
                     int topper = -1;
                     if (this.rcv_next <= data.Sn)
                     {
-                        for(int i = 0; i < this.recv_buff.Length; i++)
+                        for (int i = 0; i < this.recv_buff.Length; i++)
                         {
                             var pack = this.recv_buff[i];
-                            if(pack.Sn == data.Sn)
+                            if (pack.Sn == data.Sn)
                             {
                                 exist = true;
                                 break;
@@ -170,9 +170,9 @@ namespace KcpSM
                             }
                         }
                     }
-                    if(!exist)
+                    if (!exist)
                     {
-                        if(topper == -1)
+                        if (topper == -1)
                         {
                             recv_buff = append<KCPPackage>(recv_buff, data);
                         }
@@ -182,16 +182,16 @@ namespace KcpSM
                         }
                     }
                     int removecount = 0;
-                    foreach(var pack in this.recv_buff)
+                    foreach (var pack in this.recv_buff)
                     {
-                        if(this.rcv_next == pack.Sn)
+                        if (this.rcv_next == pack.Sn)
                         {
                             this.recv_queue = append<KCPPackage>(this.recv_queue, pack);
                             this.rcv_next++;
                             removecount++;
                         }
                     }
-                    if(removecount > 0)
+                    if (removecount > 0)
                     {
                         this.recv_buff = slice<KCPPackage>(this.recv_buff, removecount, this.recv_buff.Length);
                     }
@@ -203,7 +203,7 @@ namespace KcpSM
             }
             if (data.Cmd == 84)
             {
-                
+
             }
             return 0;
         }
@@ -215,7 +215,7 @@ namespace KcpSM
             else if (this.recv_queue[0].Frg == 0)
                 length = this.recv_queue[0].Data.Length;
             else if (this.recv_queue[0].Frg < this.recv_queue.Length)
-                for(int i = this.recv_queue[0].Frg + 1; i > 0; i++)
+                for (int i = this.recv_queue[0].Frg + 1; i > 0; i++)
                     length += recv_queue[i].Data.Length;
             else
                 length = -1;
@@ -235,6 +235,49 @@ namespace KcpSM
             return true;
         }
 
+
+        private int mtu = 1300;
+        private int mss { get { return mtu - 24; } }
+        private int Max = 128;
+        public int SendMsg(byte[] data)
+        {
+            if (data == null || data.Length == 0)
+                return -1;
+            int count = 1;
+            if(data.Length > mss)
+            {
+                count = (data.Length + mss - 1) / mss;
+            }
+            if (count > 255)
+                return -2;
+            if (send_queue.Length > Max)
+                return -3;
+            int offset = 0;
+            for(int i = 0; i < count; i++)
+            {
+                KCPPackage pack = null;
+                if (count - 1 == i)
+                {
+                    pack = CreateSendPack(data.Length - offset, 0);
+                    Array.Copy(data, offset, pack.Data, 0, pack.Data.Length);
+                    send_queue = append<KCPPackage>(send_queue, pack);
+                    break;
+                }
+                pack = CreateSendPack(mss, (byte)(count - i - 1));
+                Array.Copy(data, offset, pack.Data, 0, pack.Data.Length);
+                send_queue = append<KCPPackage>(send_queue, pack);
+                offset += mss;
+            }
+            return 0;
+        }
+        private KCPPackage CreateSendPack(int size, byte frg)
+        {
+            var result = new KCPPackage();
+            result.Data = new byte[size];
+            result.Length = (uint)size;
+            result.Frg = frg;
+            return result;
+        }
         //----------------------------help---------------------------------
         public static T[] slice<T>(T[] p, int start, int stop)
         {
